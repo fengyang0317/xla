@@ -63,6 +63,7 @@ FLAGS = args_parse.parse_common_options(
     opts=MODEL_OPTS.items(),
 )
 
+import datasets
 import os
 import schedulers
 import numpy as np
@@ -85,6 +86,7 @@ import torch_xla.core.xla_model as xm
 import torch_xla.debug.profiler as xp
 import torch_xla.test.test_utils as test_utils
 import torch_xla.distributed.spmd as xs
+import sys
 
 xr.use_spmd(auto=FLAGS.auto_spmd)
 
@@ -165,27 +167,29 @@ def train_imagenet():
   else:
     normalize = transforms.Normalize(
         mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    train_dataset = torchvision.datasets.ImageFolder(
-        os.path.join(FLAGS.datadir, 'train'),
-        transforms.Compose([
+
+    def transform_fn(examples, transform):
+        examples['image'] = [transform(image.convert('RGB')) for image in examples['image']]
+        return examples
+
+    ds = datasets.load_from_disk(FLAGS.datadir, keep_in_memory=True)
+    train_dataset = ds['train']
+    train_dataset = train_dataset.with_transform(partial(transform_fn, transform=transforms.Compose([
             transforms.RandomResizedCrop(img_dim),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             normalize,
-        ]))
-    train_dataset_len = len(train_dataset.imgs)
+        ])), columns=['image', 'label'])
+    train_dataset_len = len(train_dataset)
     resize_dim = max(img_dim, 256)
-    test_dataset = torchvision.datasets.ImageFolder(
-        os.path.join(FLAGS.datadir, 'val'),
-        # Matches Torchvision's eval transforms except Torchvision uses size
-        # 256 resize for all models both here and in the train loader. Their
-        # version crashes during training on 299x299 images, e.g. inception.
-        transforms.Compose([
+
+    test_dataset = ds['val']
+    test_dataset = test_dataset.with_transform(partial(transform_fn, transform=transforms.Compose([
             transforms.Resize(resize_dim),
             transforms.CenterCrop(img_dim),
             transforms.ToTensor(),
             normalize,
-        ]))
+        ])), columns=['image', 'label'])
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
@@ -312,9 +316,9 @@ def train_imagenet():
   def train_loop_fn(loader, epoch):
     tracker = xm.RateTracker()
     model.train()
-    for step, (data, target) in enumerate(loader):
-      x = data.to(xm.xla_device())
-      y = target.to(xm.xla_device())
+    for step, data in enumerate(loader):
+      x = data['image'].to(xm.xla_device())
+      y = data['label'].to(xm.xla_device())
       with xp.StepTrace('train_imagenet'):
         with xp.Trace('build_graph'):
           optimizer.zero_grad()
@@ -343,13 +347,13 @@ def train_imagenet():
   def test_loop_fn(loader, epoch):
     total_samples, correct = 0, 0
     model.eval()
-    for step, (data, target) in enumerate(loader):
-      data = data.to(xm.xla_device())
-      target = target.to(xm.xla_device())
-      output = model(data)
+    for step, data in enumerate(loader):
+      image = data['image'].to(xm.xla_device())
+      target = data['label'].to(xm.xla_device())
+      output = model(image)
       pred = output.max(1, keepdim=True)[1]
       correct += pred.eq(target.view_as(pred)).sum()
-      total_samples += data.size()[0]
+      total_samples += image.size()[0]
       if step % FLAGS.log_steps == 0:
         xm.add_step_closure(
             test_utils.print_test_update, args=(device, None, epoch, step))
