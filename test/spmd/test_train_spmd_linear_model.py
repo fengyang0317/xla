@@ -122,6 +122,18 @@ def train():
       xm.mark_step()
       if step % 10 == 0:
         print(f"Epoch {epoch} step {step} loss {loss}")
+      if step == 100 or step == 300 or step == 500:
+        xp.trace_detached(
+            f'localhost:{FLAGS.profiler_port}',
+            '/tmp/xla_profile',
+            duration_ms=1000,
+            num_tracing_attempts=1)
+      if step == 200:
+        tmp = torch.randn([1000, 1000, 1000]).to('xla')
+      if step == 400:
+        del tmp
+        import gc
+        gc.collect()
 
   for epoch in range(FLAGS.num_epochs):
     train_loop_fn(train_loader, epoch)
