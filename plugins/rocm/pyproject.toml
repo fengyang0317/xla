@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools", "numpy"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "torch_xla_rocm_plugin"
+authors = [
+    {name = "PyTorch/XLA Dev Team", email = "pytorch-xla@googlegroups.com"},
+]
+description = "PyTorch/XLA ROCM Plugin"
+requires-python = ">=3.8"
+dynamic = ["version"]
+
+[tool.setuptools.package-data]
+torch_xla_cuda_plugin = ["lib/*.so"]
+
+[project.entry-points."torch_xla.plugins"]
+rocm = "torch_xla_rocm_plugin:RocmPlugin"
